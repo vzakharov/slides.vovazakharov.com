@@ -1,0 +1,79 @@
+<!doctype html>
+<!-- The site root: a deck's slug and password open it. The password is hashed
+     here exactly as staticrypt hashes it (site.mjs, staticryptHash), and the
+     deck page takes the hash from #p= (site.mjs, LINK_KEY), so the password
+     itself never leaves this page. site.mjs fills in the salt, the host and the
+     theme's tab icon. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Slides</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231F2A37'/><rect x='7' y='9' width='18' height='14' rx='2' fill='%23F7F4EC'/></svg>">
+<style>
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #F7F4EC; color: #1F2A37; font: 16px/1.4 system-ui, sans-serif; }
+  form { display: flex; flex-direction: column; gap: 12px; width: min(320px, calc(100vw - 32px)); }
+  label { display: flex; align-items: center; gap: 8px; }
+  input[type="checkbox"] { margin: 0; }
+  input:not([type="checkbox"]), button { font: inherit; padding: 10px 12px; border-radius: 8px; border: 1px solid #D6D0C2; }
+  button { background: #1F2A37; color: #F7F4EC; border: none; cursor: pointer; }
+  button:disabled { opacity: .6; cursor: wait; }
+  .error { color: #B42318; min-height: 1.4em; margin: 0; }
+</style>
+</head>
+<body>
+<form id="open">
+  <input id="slug" placeholder="Deck" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password" required>
+  <label><input id="remember" type="checkbox"> Remember me</label>
+  <button>Open</button>
+  <p class="error" id="error"></p>
+</form>
+<script>
+const SALT = '60ebb6ec4ac25a9003ab9681b918f3b7'
+const HOST = 'slides.vovazakharov.com'
+const utf8 = s => new TextEncoder().encode(s)
+const hex = b => [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join('')
+
+async function pbkdf2(password, iterations, hash) {
+  const key = await crypto.subtle.importKey('raw', utf8(password), 'PBKDF2', false, ['deriveBits'])
+  return hex(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash, iterations, salt: utf8(SALT) }, key, 256))
+}
+
+document.getElementById('open').addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const button = e.target.querySelector('button')
+  const error = document.getElementById('error')
+  const slug = document.getElementById('slug').value.trim().toLowerCase()
+  error.textContent = ''
+  button.disabled = true
+  try {
+    const res = /^[a-z0-9-]+$/.test(slug) && await fetch(`/${slug}/check`)
+    if (!res || !res.ok) {
+      error.textContent = 'No such deck'
+      return
+    }
+    let h = await pbkdf2(document.getElementById('password').value, 1000, 'SHA-1')
+    h = await pbkdf2(h, 14000, 'SHA-256')
+    h = await pbkdf2(h, 585000, 'SHA-256')
+    // site.mjs's passwordCheck: HMAC-SHA256 of the host, keyed by the hash.
+    const key = await crypto.subtle.importKey('raw', Uint8Array.from(h.match(/../g), x => parseInt(x, 16)),
+      { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+    if (hex(await crypto.subtle.sign('HMAC', key, utf8(HOST))) !== (await res.text()).trim()) {
+      error.textContent = 'Wrong password'
+      return
+    }
+    // remember_me is staticrypt's own flag for a link: it stores the hash as
+    // the deck page's checkbox would.
+    const remember = document.getElementById('remember').checked ? '&remember_me' : ''
+    location.href = `/${slug}/#p=${h}${remember}`
+  }
+  finally {
+    button.disabled = false
+  }
+})
+</script>
+</body>
+</html>
